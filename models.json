@@ -1,0 +1,56 @@
+[
+  {
+    "id": "opencode/mimo-v2-pro-free",
+    "name": "MiMo V2 Pro Free",
+    "context": 1048576,
+    "output": 64000,
+    "vision": false,
+    "reasoning": true,
+    "toolcall": true
+  },
+  {
+    "id": "opencode/nemotron-3-super-free",
+    "name": "Nemotron 3 Super Free",
+    "context": 1000000,
+    "output": 128000,
+    "vision": false,
+    "reasoning": true,
+    "toolcall": true
+  },
+  {
+    "id": "opencode/gpt-5-nano",
+    "name": "GPT-5 Nano",
+    "context": 400000,
+    "output": 128000,
+    "vision": true,
+    "reasoning": true,
+    "toolcall": true
+  },
+  {
+    "id": "opencode/mimo-v2-omni-free",
+    "name": "MiMo V2 Omni Free",
+    "context": 262144,
+    "output": 64000,
+    "vision": true,
+    "reasoning": true,
+    "toolcall": true
+  },
+  {
+    "id": "opencode/minimax-m2.5-free",
+    "name": "MiniMax M2.5 Free",
+    "context": 204800,
+    "output": 131072,
+    "vision": false,
+    "reasoning": true,
+    "toolcall": true
+  },
+  {
+    "id": "opencode/big-pickle",
+    "name": "Big Pickle",
+    "context": 200000,
+    "output": 128000,
+    "vision": false,
+    "reasoning": true,
+    "toolcall": true
+  }
+]

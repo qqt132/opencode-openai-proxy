@@ -1,12 +1,13 @@
 name: Update Free Models List
 
 on:
-  schedule:
-    - cron: '0 2 * * *'  # 每天 UTC 02:00 (北京时间 10:00)
-  workflow_dispatch:      # 支持手动触发
+  push:
+    paths:
+      - 'models.json'   # 只在 models.json 更新时触发
+  workflow_dispatch:
 
 jobs:
-  update-models:
+  update-readme:
     runs-on: ubuntu-latest
 
     steps:
@@ -18,8 +19,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Run update script
-        run: python scripts/update_models.py
+      - name: Update README from models.json
+        run: python scripts/readme_from_models.py
 
       - name: Commit and push if changed
         run: |
@@ -27,5 +28,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git diff --quiet && echo "No changes" && exit 0
           git add README.md README.zh-CN.md
-          git commit -m "chore: update free models list [skip ci]"
+          git commit -m "chore: update README from models.json [skip ci]"
           git push

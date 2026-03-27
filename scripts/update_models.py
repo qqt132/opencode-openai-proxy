@@ -1,87 +1,64 @@
 #!/usr/bin/env python3
 """
-Update free models list in README files by querying OpenCode public API.
-Runs on GitHub Actions without requiring local OpenCode Desktop.
+Update free models list by querying local OpenCode Desktop API.
+Run this script locally whenever you want to refresh the models list.
+
+Usage:
+    python3 scripts/update_models.py
 """
 
 import json
 import re
 import sys
 import urllib.request
+from pathlib import Path
 
-OPENCODE_ZEN_URL = "https://opencode.ai/zen/v1/models"
-
-# Known free model metadata (context/output limits not exposed by public API)
-# Updated manually when new models are added
-MODEL_METADATA = {
-    "mimo-v2-pro-free":        {"context": 1_048_576, "output": 64_000,  "vision": False, "reasoning": True},
-    "mimo-v2-omni-free":       {"context": 262_144,   "output": 64_000,  "vision": True,  "reasoning": True},
-    "mimo-v2-flash-free":      {"context": 131_072,   "output": 32_000,  "vision": False, "reasoning": True},
-    "gpt-5-nano":              {"context": 400_000,   "output": 128_000, "vision": True,  "reasoning": True},
-    "nemotron-3-super-free":   {"context": 1_000_000, "output": 128_000, "vision": False, "reasoning": True},
-    "minimax-m2.5-free":       {"context": 204_800,   "output": 131_072, "vision": False, "reasoning": True},
-    "trinity-large-preview-free": {"context": 128_000, "output": 32_000, "vision": False, "reasoning": True},
-    "big-pickle":              {"context": 200_000,   "output": 128_000, "vision": False, "reasoning": True},
-}
+OPENCODE_URL = "http://localhost:8888"
+MODELS_JSON  = Path(__file__).parent.parent / "models.json"
+README_EN    = Path(__file__).parent.parent / "README.md"
+README_ZH    = Path(__file__).parent.parent / "README.zh-CN.md"
 
 
 def fetch_free_models():
     try:
-        req = urllib.request.Request(
-            OPENCODE_ZEN_URL,
-            headers={
-                "Authorization": "Bearer anonymous",
-                "User-Agent": "Mozilla/5.0 (compatible; opencode-proxy-updater/1.0)"
-            }
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        req = urllib.request.Request(f"{OPENCODE_URL}/provider")
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
     except Exception as e:
-        print(f"❌ Failed to fetch models from {OPENCODE_ZEN_URL}: {e}")
+        print(f"❌ Cannot connect to OpenCode Desktop at {OPENCODE_URL}: {e}")
+        print("   Please make sure OpenCode Desktop is running.")
         sys.exit(1)
 
     free_models = []
-    for model in data.get("data", []):
-        model_id = model.get("id", "")
-        # Free models have "-free" suffix or are known free models
-        if not (model_id.endswith("-free") or model_id in MODEL_METADATA):
+    for provider in data.get("all", []):
+        if provider.get("id") != "opencode":
             continue
-        meta = MODEL_METADATA.get(model_id, {
-            "context": 0, "output": 0, "vision": False, "reasoning": False
-        })
-        free_models.append({
-            "id": f"opencode/{model_id}",
-            "name": to_display_name(model_id),
-            **meta,
-        })
+        for model_id, model in (provider.get("models") or {}).items():
+            cost = model.get("cost", {})
+            if cost.get("input", 1) == 0 and cost.get("output", 1) == 0:
+                caps = model.get("capabilities", {})
+                inp  = caps.get("input", {})
+                free_models.append({
+                    "id":        f"opencode/{model_id}",
+                    "name":      model.get("name", model_id),
+                    "context":   model.get("limit", {}).get("context", 0),
+                    "output":    model.get("limit", {}).get("output", 0),
+                    "vision":    inp.get("image", False) or inp.get("video", False),
+                    "reasoning": caps.get("reasoning", False),
+                    "toolcall":  caps.get("toolcall", False),
+                })
 
-    # Sort by context window size descending
     free_models.sort(key=lambda x: x["context"], reverse=True)
     return free_models
-
-
-def to_display_name(model_id: str) -> str:
-    """Convert model ID to display name."""
-    known = {
-        "mimo-v2-pro-free":           "MiMo V2 Pro Free",
-        "mimo-v2-omni-free":          "MiMo V2 Omni Free",
-        "mimo-v2-flash-free":         "MiMo V2 Flash Free",
-        "gpt-5-nano":                 "GPT-5 Nano",
-        "nemotron-3-super-free":      "Nemotron 3 Super Free",
-        "minimax-m2.5-free":          "MiniMax M2.5 Free",
-        "trinity-large-preview-free": "Trinity Large Preview Free",
-        "big-pickle":                 "Big Pickle",
-    }
-    return known.get(model_id, model_id)
 
 
 def fmt_tokens(n):
     if n >= 1_000_000:
         v = n / 1_000_000
-        return f"{v:.0f}M" if v == int(v) else f"{v:.1f}M"
+        return f"{int(v)}M" if v == int(v) else f"{v:.1f}M"
     if n >= 1_000:
         v = n / 1_000
-        return f"{v:.0f}K" if v == int(v) else f"{v:.1f}K"
+        return f"{int(v)}K" if v == int(v) else f"{v:.1f}K"
     return str(n)
 
 
@@ -97,7 +74,9 @@ def build_en_table(models):
             f"| {'✅' if m['reasoning'] else '❌'} |"
         )
     lines.append("")
-    lines.append("> All models support tool calling. Models are provided by [OpenCode Zen](https://opencode.ai) and are subject to change.")
+    lines.append("> All models support tool calling. "
+                 "Models are provided by [OpenCode Zen](https://opencode.ai) "
+                 "and are subject to change.")
     return "\n".join(lines)
 
 
@@ -113,54 +92,53 @@ def build_zh_table(models):
             f"| {'✅' if m['reasoning'] else '❌'} |"
         )
     lines.append("")
-    lines.append("> 所有模型均支持工具调用。模型由 [OpenCode Zen](https://opencode.ai) 提供，可能随时更新。")
+    lines.append("> 所有模型均支持工具调用。"
+                 "模型由 [OpenCode Zen](https://opencode.ai) 提供，可能随时更新。")
     return "\n".join(lines)
 
 
 def update_readme(filepath, new_table, lang="en"):
-    with open(filepath, "r", encoding="utf-8") as f:
-        content = f.read()
+    content = filepath.read_text(encoding="utf-8")
 
     if lang == "en":
-        pattern = (
-            r"(\| Model ID \| Name \| Context.*?\n"
-            r"\|[-| ]+\|\n"
-            r"(?:\|.*?\n)+"
-            r"\n> All models support tool calling.*?\n)"
-        )
+        pattern = (r"\| Model ID \| Name \|.*?\n"
+                   r"(?:\|.*?\n)+"
+                   r"\n> All models support tool calling\..*?\n")
     else:
-        pattern = (
-            r"(\| 模型 ID \| 名称 \| 上下文.*?\n"
-            r"\|[-| ]+\|\n"
-            r"(?:\|.*?\n)+"
-            r"\n> 所有模型均支持工具调用.*?\n)"
-        )
+        pattern = (r"\| 模型 ID \| 名称 \|.*?\n"
+                   r"(?:\|.*?\n)+"
+                   r"\n> 所有模型均支持工具调用。.*?\n")
 
     new_content = re.sub(pattern, new_table + "\n", content, flags=re.DOTALL)
-
     if new_content == content:
-        print(f"⚠️  {filepath}: No changes detected")
+        print(f"  ⚠️  {filepath.name}: no changes")
         return False
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(new_content)
-    print(f"✅ {filepath}: Updated")
+    filepath.write_text(new_content, encoding="utf-8")
+    print(f"  ✅ {filepath.name}: updated")
     return True
 
 
 if __name__ == "__main__":
-    print(f"🔍 Fetching free models from {OPENCODE_ZEN_URL}...")
+    print("🔍 Fetching free models from local OpenCode Desktop...")
     models = fetch_free_models()
+
     print(f"✓ Found {len(models)} free models:")
     for m in models:
-        print(f"  - {m['id']} ({m['name']}) ctx={fmt_tokens(m['context'])}")
+        print(f"  - {m['id']} ({m['name']}) "
+              f"ctx={fmt_tokens(m['context'])} out={fmt_tokens(m['output'])}")
 
+    # Save to models.json
+    MODELS_JSON.write_text(json.dumps(models, indent=2, ensure_ascii=False) + "\n",
+                           encoding="utf-8")
+    print(f"\n💾 Saved to {MODELS_JSON.name}")
+
+    # Update README files
     print("\n📝 Updating README files...")
-    changed = False
-    changed |= update_readme("README.md", build_en_table(models), lang="en")
-    changed |= update_readme("README.zh-CN.md", build_zh_table(models), lang="zh")
+    update_readme(README_EN, build_en_table(models), lang="en")
+    update_readme(README_ZH, build_zh_table(models), lang="zh")
 
-    if changed:
-        print("\n✅ README files updated successfully!")
-    else:
-        print("\n✅ README files are already up to date.")
+    print("\n✅ Done! Run the following to publish:")
+    print("   git add models.json README.md README.zh-CN.md")
+    print('   git commit -m "chore: update free models list"')
+    print("   git push")
