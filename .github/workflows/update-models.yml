@@ -1,0 +1,46 @@
+name: Update Free Models List
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # 每天 UTC 02:00 (北京时间 10:00)
+  workflow_dispatch:      # 支持手动触发
+
+jobs:
+  update-models:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install OpenCode CLI
+        run: npm install -g opencode-ai
+
+      - name: Start OpenCode Desktop
+        run: |
+          opencode serve --port 8888 &
+          echo "Waiting for OpenCode to start..."
+          for i in $(seq 1 20); do
+            if curl -s http://localhost:8888/global/health > /dev/null 2>&1; then
+              echo "✓ OpenCode is ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run update script
+        run: python scripts/update_models.py
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --quiet && echo "No changes" && exit 0
+          git add README.md README.zh-CN.md
+          git commit -m "chore: update free models list [skip ci]"
+          git push

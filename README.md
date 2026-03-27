@@ -154,10 +154,10 @@ curl http://localhost:8000/v1/models
 | Model ID | Name | Context | Max Output | Vision | Reasoning |
 |----------|------|---------|------------|--------|-----------|
 | `opencode/mimo-v2-pro-free` | MiMo V2 Pro Free | 1M | 64K | ❌ | ✅ |
-| `opencode/mimo-v2-omni-free` | MiMo V2 Omni Free | 256K | 64K | ✅ | ✅ |
-| `opencode/gpt-5-nano` | GPT-5 Nano | 400K | 128K | ✅ | ✅ |
 | `opencode/nemotron-3-super-free` | Nemotron 3 Super Free | 1M | 128K | ❌ | ✅ |
-| `opencode/minimax-m2.5-free` | MiniMax M2.5 Free | 200K | 128K | ❌ | ✅ |
+| `opencode/gpt-5-nano` | GPT-5 Nano | 400K | 128K | ✅ | ✅ |
+| `opencode/mimo-v2-omni-free` | MiMo V2 Omni Free | 262K | 64K | ✅ | ✅ |
+| `opencode/minimax-m2.5-free` | MiniMax M2.5 Free | 204K | 131K | ❌ | ✅ |
 | `opencode/big-pickle` | Big Pickle | 200K | 128K | ❌ | ✅ |
 
 > All models support tool calling. Models are provided by [OpenCode Zen](https://opencode.ai) and are subject to change.
