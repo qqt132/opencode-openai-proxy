@@ -153,12 +153,14 @@ curl http://localhost:8000/v1/models
 
 | 模型 ID | 名称 | 上下文 | 最大输出 | 视觉 | 推理 |
 |---------|------|--------|----------|------|------|
-| `opencode/mimo-v2-pro-free` | MiMo V2 Pro Free | 1M | 64K | ❌ | ✅ |
+| `opencode/mimo-v2-pro-free` | MiMo V2 Pro Free | 1.0M | 64K | ❌ | ✅ |
 | `opencode/nemotron-3-super-free` | Nemotron 3 Super Free | 1M | 128K | ❌ | ✅ |
 | `opencode/gpt-5-nano` | GPT-5 Nano | 400K | 128K | ✅ | ✅ |
-| `opencode/mimo-v2-omni-free` | MiMo V2 Omni Free | 262K | 64K | ✅ | ✅ |
-| `opencode/minimax-m2.5-free` | MiniMax M2.5 Free | 204K | 131K | ❌ | ✅ |
+| `opencode/mimo-v2-omni-free` | MiMo V2 Omni Free | 262.1K | 64K | ✅ | ✅ |
+| `opencode/minimax-m2.5-free` | MiniMax M2.5 Free | 204.8K | 131.1K | ❌ | ✅ |
 | `opencode/big-pickle` | Big Pickle | 200K | 128K | ❌ | ✅ |
+| `opencode/mimo-v2-flash-free` | MiMo V2 Flash Free | 131.1K | 32K | ❌ | ✅ |
+| `opencode/trinity-large-preview-free` | Trinity Large Preview Free | 128K | 32K | ❌ | ✅ |
 
 > 所有模型均支持工具调用。模型由 [OpenCode Zen](https://opencode.ai) 提供，可能随时更新。
 

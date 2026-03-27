@@ -153,12 +153,14 @@ curl http://localhost:8000/v1/models
 
 | Model ID | Name | Context | Max Output | Vision | Reasoning |
 |----------|------|---------|------------|--------|-----------|
-| `opencode/mimo-v2-pro-free` | MiMo V2 Pro Free | 1M | 64K | ❌ | ✅ |
+| `opencode/mimo-v2-pro-free` | MiMo V2 Pro Free | 1.0M | 64K | ❌ | ✅ |
 | `opencode/nemotron-3-super-free` | Nemotron 3 Super Free | 1M | 128K | ❌ | ✅ |
 | `opencode/gpt-5-nano` | GPT-5 Nano | 400K | 128K | ✅ | ✅ |
-| `opencode/mimo-v2-omni-free` | MiMo V2 Omni Free | 262K | 64K | ✅ | ✅ |
-| `opencode/minimax-m2.5-free` | MiniMax M2.5 Free | 204K | 131K | ❌ | ✅ |
+| `opencode/mimo-v2-omni-free` | MiMo V2 Omni Free | 262.1K | 64K | ✅ | ✅ |
+| `opencode/minimax-m2.5-free` | MiniMax M2.5 Free | 204.8K | 131.1K | ❌ | ✅ |
 | `opencode/big-pickle` | Big Pickle | 200K | 128K | ❌ | ✅ |
+| `opencode/mimo-v2-flash-free` | MiMo V2 Flash Free | 131.1K | 32K | ❌ | ✅ |
+| `opencode/trinity-large-preview-free` | Trinity Large Preview Free | 128K | 32K | ❌ | ✅ |
 
 > All models support tool calling. Models are provided by [OpenCode Zen](https://opencode.ai) and are subject to change.
 
