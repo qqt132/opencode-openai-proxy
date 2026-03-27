@@ -159,10 +159,11 @@ curl http://localhost:8000/v1/models
 | `opencode/mimo-v2-omni-free` | MiMo V2 Omni Free | 262.1K | 64K | ✅ | ✅ |
 | `opencode/minimax-m2.5-free` | MiniMax M2.5 Free | 204.8K | 131.1K | ❌ | ✅ |
 | `opencode/big-pickle` | Big Pickle | 200K | 128K | ❌ | ✅ |
-| `opencode/mimo-v2-flash-free` | MiMo V2 Flash Free | 131.1K | 32K | ❌ | ✅ |
-| `opencode/trinity-large-preview-free` | Trinity Large Preview Free | 128K | 32K | ❌ | ✅ |
+| `opencode/mimo-v2-flash-free` | MiMo V2 Flash Free | 131K | 32K | ❌ | ✅ | ⚠️ |
+| `opencode/trinity-large-preview-free` | Trinity Large Preview Free | 128K | 32K | ❌ | ✅ | ⚠️ |
 
 > 所有模型均支持工具调用。模型由 [OpenCode Zen](https://opencode.ai) 提供，可能随时更新。
+> ⚠️ = 预览/暂不可用
 
 ## 健康检查
 
