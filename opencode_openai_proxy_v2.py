@@ -306,40 +306,55 @@ async def lifespan(app: FastAPI):
     )
     _semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
-    # Check if OpenCode Desktop is running, start if not
+    import subprocess
+
+    async def _wait_for_opencode(timeout_seconds: float = 10.0) -> None:
+        attempts = max(1, int(timeout_seconds / 0.5))
+        for i in range(attempts):
+            await asyncio.sleep(0.5)
+            try:
+                resp = await http_client.get("/global/health", timeout=2.0)
+                resp.raise_for_status()
+                return
+            except Exception:
+                if i == attempts - 1:
+                    raise RuntimeError(
+                        f"OpenCode Desktop failed to become healthy within {timeout_seconds} seconds"
+                    )
+
+    async def _restart_or_start_opencode(already_running: bool) -> None:
+        port = OPENCODE_URL.split(":")[-1].rstrip("/")
+        if already_running:
+            log.info("Restarting existing OpenCode Desktop before proxy startup...")
+            subprocess.run(
+                ["pkill", "-f", rf"(^|/)opencode(\s|$).*serve(\s|$).*--port\s+{port}(\s|$)"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            await asyncio.sleep(1.0)
+        else:
+            log.info("Attempting to start OpenCode Desktop...")
+
+        subprocess.Popen(
+            ["opencode", "serve", "--port", port],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        await _wait_for_opencode(timeout_seconds=10.0)
+
     try:
         resp = await http_client.get("/global/health", timeout=5.0)
         resp.raise_for_status()
         log.info("✓ OpenCode Desktop is running at %s", OPENCODE_URL)
+        await _restart_or_start_opencode(already_running=True)
+        log.info("✓ OpenCode Desktop restarted successfully")
     except Exception as exc:
-        log.warning("✗ OpenCode Desktop is not running at %s: %s", OPENCODE_URL, exc)
-        log.info("Attempting to start OpenCode Desktop...")
-
-        import subprocess
-
+        log.warning("✗ OpenCode Desktop is not running cleanly at %s: %s", OPENCODE_URL, exc)
         try:
-            # Start OpenCode in background
-            port = OPENCODE_URL.split(":")[-1].rstrip("/")
-            subprocess.Popen(
-                ["opencode", "serve", "--port", port],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-
-            # Wait for it to start (max 10 seconds)
-            for i in range(20):
-                await asyncio.sleep(0.5)
-                try:
-                    resp = await http_client.get("/global/health", timeout=2.0)
-                    resp.raise_for_status()
-                    log.info("✓ OpenCode Desktop started successfully")
-                    break
-                except:
-                    if i == 19:
-                        raise RuntimeError(
-                            "OpenCode Desktop failed to start within 10 seconds"
-                        )
+            await _restart_or_start_opencode(already_running=False)
+            log.info("✓ OpenCode Desktop started successfully")
         except Exception as start_exc:
             log.error("Failed to start OpenCode Desktop: %s", start_exc)
             raise RuntimeError(
