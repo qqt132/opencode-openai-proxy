@@ -26,3 +26,6 @@ Thumbs.db
 # Project specific
 proxy.log
 proxy_v2.log
+
+opencode_openai_proxy_v2.py.backup-*
+opencode_openai_proxy_v2.py.bak-*
