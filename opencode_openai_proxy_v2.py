@@ -974,6 +974,7 @@ async def chat_completions(
         if not sanitized_messages:
             raise HTTPException(status_code=400, detail="Invalid chat request: no messages left after trimming trailing assistant messages")
 
+        bootstrap_request = is_session_reset_request(sanitized_messages)
         conv_key: Optional[str] = infer_conv_key(sanitized_messages, explicit_conv_key)
         next_conv_key: Optional[str] = next_turn_conv_key(sanitized_messages, explicit_conv_key)
 
@@ -986,10 +987,11 @@ async def chat_completions(
         user_summary = last_user_summary(sanitized_messages)
 
         log.info(
-            "request_id=%s model=%s stream=%s conv_key=%s next_conv_key=%s new_session=%s messages=%d anchor=%r last_user=%r prompt_tokens~=%d",
+            "request_id=%s model=%s stream=%s bootstrap_request=%s conv_key=%s next_conv_key=%s new_session=%s messages=%d anchor=%r last_user=%r prompt_tokens~=%d",
             request_id,
             request.model,
             request.stream,
+            bootstrap_request,
             conv_key,
             next_conv_key,
             is_new_session,
