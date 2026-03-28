@@ -18,6 +18,7 @@ import time
 import uuid
 import asyncio
 import logging
+import hashlib
 from collections import OrderedDict
 from typing import Optional, List, Dict, Any, Union, Literal
 from contextlib import asynccontextmanager
@@ -375,6 +376,187 @@ def format_tool_calls(tool_calls: List[ToolCall]) -> str:
     )
 
 
+def trim_trailing_assistant_messages(messages: List[Message]) -> List[Message]:
+    """Drop trailing assistant messages so the prompt never ends with assistant content."""
+    trimmed = list(messages)
+    removed = 0
+    while trimmed and trimmed[-1].role == "assistant":
+        trimmed.pop()
+        removed += 1
+
+    if removed:
+        log.warning("Trimmed %d trailing assistant message(s) from incoming request", removed)
+
+    return trimmed
+
+
+def build_prompt_for_session(messages: List[Message], is_new_session: bool) -> str:
+    """
+    For a new OpenCode session, send system/developer context plus the latest user turn.
+    For an existing session, send only the latest user turn and let OpenCode keep history.
+    """
+    latest_user: Optional[Message] = None
+    for msg in reversed(messages):
+        if msg.role == "user":
+            latest_user = msg
+            break
+
+    if latest_user is None:
+        raise HTTPException(status_code=400, detail="Invalid chat request: no user message found")
+
+    if not is_new_session:
+        text = extract_text_from_content(latest_user.content)
+        if latest_user.name:
+            return f"{latest_user.name}: {text}"
+        return text
+
+    seed_messages: List[Message] = []
+    for msg in messages:
+        if msg.role in ("system", "developer"):
+            seed_messages.append(msg)
+    seed_messages.append(latest_user)
+    return convert_messages_to_prompt(seed_messages)
+
+
+def summarize_text(text: str, limit: int = 120) -> str:
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+def first_anchor_summary(messages: List[Message]) -> str:
+    for msg in messages:
+        if msg.role in ("system", "developer"):
+            return f"{msg.role}:{summarize_text(extract_text_from_content(msg.content))}"
+    return ""
+
+
+def last_user_summary(messages: List[Message]) -> str:
+    for msg in reversed(messages):
+        if msg.role == "user":
+            prefix = f"{msg.name}: " if msg.name else ""
+            return f"{prefix}{summarize_text(extract_text_from_content(msg.content))}"
+    return ""
+
+
+def message_signature(messages: List[Message]) -> str:
+    """Stable hash for a message prefix, used to infer conversation continuity from standard OpenAI messages."""
+    canonical: List[Dict[str, Any]] = []
+    for msg in messages:
+        item: Dict[str, Any] = {
+            "role": msg.role,
+            "content": extract_text_from_content(msg.content),
+        }
+        if msg.name:
+            item["name"] = msg.name
+        if msg.tool_call_id:
+            item["tool_call_id"] = msg.tool_call_id
+        if msg.tool_calls:
+            item["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                }
+                for tc in msg.tool_calls
+            ]
+        if msg.function_call:
+            item["function_call"] = {
+                "name": msg.function_call.name,
+                "arguments": msg.function_call.arguments,
+            }
+        canonical.append(item)
+    payload = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def extract_cron_job_id(messages: List[Message]) -> Optional[str]:
+    for msg in reversed(messages):
+        if msg.role != "user":
+            continue
+        text = extract_text_from_content(msg.content)
+        match = re.search(r"\[cron:([a-f0-9-]{8,})\b", text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return None
+
+
+def is_session_reset_request(messages: List[Message]) -> bool:
+    for msg in reversed(messages):
+        if msg.role != "user":
+            continue
+        text = extract_text_from_content(msg.content)
+        if "A new session was started via /new or /reset" in text:
+            return True
+    return False
+
+
+def _stable_user_fingerprint(messages: List[Message]) -> Optional[str]:
+    for msg in reversed(messages):
+        if msg.role != "user":
+            continue
+        text = summarize_text(extract_text_from_content(msg.content), limit=240)
+        if not text:
+            continue
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return None
+
+
+def infer_conv_key(messages: List[Message], explicit_key: Optional[str]) -> Optional[str]:
+    """
+    Infer conversation identity from standard OpenAI messages when the client does not
+    provide X-Session-Id/user.
+
+    Strategy:
+      1. Prefer an explicit key when present.
+      2. For cron payloads, key by cron job id.
+      3. For /new or /reset bootstrap requests, force a fresh session.
+      4. Otherwise combine the first system/developer anchor with a stable fingerprint
+         of the latest user payload to avoid unrelated flows colliding on the same
+         global system prompt.
+    """
+    if explicit_key:
+        return explicit_key
+
+    cron_job_id = extract_cron_job_id(messages)
+    if cron_job_id:
+        return f"auto:cron:{cron_job_id}"
+
+    if is_session_reset_request(messages):
+        return None
+
+    anchor_messages = [m for m in messages if m.role in ("system", "developer")]
+    latest_user_fp = _stable_user_fingerprint(messages)
+    if anchor_messages and latest_user_fp:
+        return f"auto:anchor-user:{message_signature([anchor_messages[0]])}:{latest_user_fp}"
+    if anchor_messages:
+        return f"auto:anchor:{message_signature([anchor_messages[0]])}"
+
+    latest_user_idx = -1
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].role == "user":
+            latest_user_idx = i
+            break
+
+    if latest_user_idx <= 0:
+        return None
+
+    prefix = messages[:latest_user_idx]
+    if not prefix:
+        return None
+
+    return f"auto:prefix:{message_signature(prefix)}"
+
+
+def next_turn_conv_key(messages: List[Message], explicit_key: Optional[str]) -> Optional[str]:
+    """
+    Cache key representing the conversation after the current assistant reply completes.
+    Keep the same strategy as infer_conv_key so subsequent turns reliably hit the same session.
+    """
+    return infer_conv_key(messages, explicit_key)
+
+
 def convert_messages_to_prompt(messages: List[Message]) -> str:
     """
     Convert the full OpenAI messages array into a single structured prompt text.
@@ -419,7 +601,10 @@ def convert_messages_to_prompt(messages: List[Message]) -> str:
 
 def extract_text_from_opencode_message(message: Dict[str, Any]) -> str:
     parts = message.get("parts", [])
-    return "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+    return "".join(
+        p.get("text", "") for p in parts
+        if p.get("type") == "text"  # exclude thinking, tool-call, etc.
+    )
 
 
 # ── OpenCode API helpers ──────────────────────────────────────────────────────
@@ -427,25 +612,23 @@ def extract_text_from_opencode_message(message: Dict[str, Any]) -> str:
 async def _get_or_create_session(
     conv_key: Optional[str],
     model_config: Dict[str, str],
-) -> str:
+) -> tuple[str, bool]:
     """
-    Return a cached session_id for the given conversation key, or create a new one.
-    If conv_key is None, always create a fresh (ephemeral) session.
+    Return (session_id, is_new_session).
+    If conv_key is provided, reuse the cached OpenCode session when available.
+    If conv_key is None, always create a fresh ephemeral session.
     """
     if conv_key:
         entry = await session_cache.get(conv_key)
         if entry:
-            # Reuse existing session
-            log.debug("Reusing session key=%s id=%s", conv_key, entry.session_id)
-            return entry.session_id
+            log.info("Reusing session key=%s id=%s", conv_key, entry.session_id)
+            return entry.session_id, False
 
-    # Create a new session
     try:
         resp = await http_client.post(
             "/session",
             json={
                 "title": f"Proxy {time.strftime('%Y-%m-%d %H:%M:%S')}",
-                "model": model_config,
             },
         )
         resp.raise_for_status()
@@ -459,15 +642,21 @@ async def _get_or_create_session(
     if conv_key:
         await session_cache.put(conv_key, session_id, model_config)
 
-    return session_id
+    return session_id, True
 
 
 async def send_message_sync(session_id: str, prompt: str, model_config: Dict[str, str]) -> Dict[str, Any]:
+    payload = {"parts": [{"type": "text", "text": prompt}], "model": model_config}
+    log.debug(
+        "=== FORWARDING TO OPENCODE (sync) session=%s ===\n  model_config=%s\n  prompt(first 600):\n%s",
+        session_id, model_config, prompt[:600],
+    )
     try:
         resp = await http_client.post(
             f"/session/{session_id}/message",
-            json={"parts": [{"type": "text", "text": prompt}], "model": model_config},
+            json=payload,
         )
+        log.debug("=== OPENCODE RESPONSE (sync) status=%d body=%s ===", resp.status_code, resp.text[:400])
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPError as exc:
@@ -476,11 +665,17 @@ async def send_message_sync(session_id: str, prompt: str, model_config: Dict[str
 
 
 async def send_message_async(session_id: str, prompt: str, model_config: Dict[str, str]):
+    payload = {"parts": [{"type": "text", "text": prompt}], "model": model_config}
+    log.debug(
+        "=== FORWARDING TO OPENCODE (async) session=%s ===\n  model_config=%s\n  prompt(first 600):\n%s",
+        session_id, model_config, prompt[:600],
+    )
     try:
         resp = await http_client.post(
             f"/session/{session_id}/prompt_async",
-            json={"parts": [{"type": "text", "text": prompt}], "model": model_config},
+            json=payload,
         )
+        log.debug("=== OPENCODE RESPONSE (async) status=%d body=%s ===", resp.status_code, resp.text[:400])
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         log.error("send_message_async failed: %s", exc)
@@ -489,59 +684,16 @@ async def send_message_async(session_id: str, prompt: str, model_config: Dict[st
 
 # ── Per-session SSE streaming ─────────────────────────────────────────────────
 
-class _NotSSEEndpoint(Exception):
-    """Raised when endpoint doesn't return SSE content."""
-    pass
 
-
-async def _stream_session_events(session_id: str):
+async def generate_stream_response(session_id: str, prompt: str, model_config: Dict[str, str], model: str, request_id: str, delete_on_finish: bool, next_conv_key: Optional[str], current_conv_key: Optional[str]):
+    """Yield OpenAI-compatible SSE chunks.
+    
+    Architecture:
+      1. Start SSE reader task in background (establishes connection)
+      2. Wait for 'server.connected' to confirm connection is live
+      3. Send prompt (avoids race condition where events arrive before we listen)
+      4. Process events from queue
     """
-    Connect to the per-session SSE endpoint: GET /session/:id/event
-    Yields parsed event dicts. Falls back to global /event with session filter
-    if the per-session endpoint returns 404 or non-SSE content.
-    """
-    per_session_url = f"/session/{session_id}/event"
-    global_url      = "/event"
-
-    async def _read_lines(url: str, filter_sid: Optional[str]):
-        async with http_client.stream("GET", url, headers={"Accept": "text/event-stream"}) as resp:
-            # Check if this is actually an SSE endpoint
-            content_type = resp.headers.get("content-type", "")
-            if url == per_session_url and not content_type.startswith("text/event-stream"):
-                raise _NotSSEEndpoint(f"Per-session endpoint returned {content_type}, not SSE")
-            if resp.status_code == 404 and url == per_session_url:
-                raise httpx.HTTPStatusError("404 Not Found", request=resp.request, response=resp)
-            resp.raise_for_status()
-            async for raw in resp.aiter_lines():
-                if not raw.startswith("data: "):
-                    continue
-                try:
-                    evt = json.loads(raw[6:])
-                except json.JSONDecodeError:
-                    continue
-                if filter_sid:
-                    props = evt.get("properties", {})
-                    if props.get("sessionID", "") != filter_sid:
-                        continue
-                yield evt
-
-    # Try per-session endpoint first
-    try:
-        async for evt in _read_lines(per_session_url, None):
-            yield evt
-        return
-    except (_NotSSEEndpoint, httpx.HTTPStatusError) as exc:
-        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code != 404:
-            raise
-        log.debug("Per-session SSE not available (%s), falling back to /event", exc)
-
-    # Fallback: global endpoint, filter by sessionID
-    async for evt in _read_lines(global_url, session_id):
-        yield evt
-
-
-async def generate_stream_response(session_id: str, model: str, request_id: str):
-    """Yield OpenAI-compatible SSE chunks."""
     created = int(time.time())
 
     def _chunk(delta: Dict[str, Any], finish: Optional[str] = None) -> str:
@@ -556,28 +708,154 @@ async def generate_stream_response(session_id: str, model: str, request_id: str)
     # Role header chunk
     yield _chunk({"role": "assistant", "content": ""})
 
-    full_content = ""
+    event_queue: asyncio.Queue = asyncio.Queue()
+    connection_ready = asyncio.Event()
+
+    async def _sse_reader():
+        """Background task: read SSE events and put them in the queue."""
+        try:
+            async with http_client.stream("GET", "/event", headers={"Accept": "text/event-stream"}) as resp:
+                content_type = resp.headers.get("content-type", "")
+                if not content_type.startswith("text/event-stream"):
+                    raise RuntimeError(f"Not SSE: {content_type}")
+                resp.raise_for_status()
+                
+                async for raw in resp.aiter_lines():
+                    if not raw.startswith("data: "):
+                        continue
+                    log.debug("=== RAW SSE [session=%s] %s", session_id, raw[:400])
+                    try:
+                        evt = json.loads(raw[6:])
+                    except json.JSONDecodeError:
+                        continue
+
+                    etype = evt.get("type", "")
+
+                    # Signal connection is ready on server.connected
+                    if etype == "server.connected":
+                        connection_ready.set()
+                        continue
+
+                    # Filter by sessionID
+                    props = evt.get("properties", {})
+                    sid_val = props.get("sessionID") or props.get("sessionId") or props.get("session_id") or ""
+                    if sid_val and sid_val != session_id:
+                        continue  # event belongs to a different session
+
+                    await event_queue.put(evt)
+
+        except Exception as exc:
+            log.error("SSE reader error for session %s: %s", session_id, exc)
+            await event_queue.put(exc)
+        finally:
+            await event_queue.put(None)  # sentinel: stream ended
+
+    # 1. Start SSE reader in background
+    sse_task = asyncio.create_task(_sse_reader())
+
     try:
-        async for event in _stream_session_events(session_id):
+        # 2. Wait for connection to be confirmed (server.connected)
+        try:
+            await asyncio.wait_for(connection_ready.wait(), timeout=10.0)
+            log.info("SSE connection confirmed for session=%s, sending prompt now", session_id)
+        except asyncio.TimeoutError:
+            log.warning("SSE connection_ready timeout for session=%s, sending prompt anyway", session_id)
+
+        # 3. Send the prompt AFTER SSE is confirmed live
+        await send_message_async(session_id, prompt, model_config)
+
+        # 4. Process events from queue
+        # Track message roles and part types to filter correctly
+        user_message_ids: set = set()       # messageIDs with role=user
+        assistant_message_ids: set = set()  # messageIDs with role=assistant
+        reasoning_part_ids: set = set()     # partIDs with type=reasoning (thinking content)
+        part_contents: Dict[str, str] = {}  # partID -> accumulated text for each text part
+
+        while True:
+            try:
+                item = await asyncio.wait_for(event_queue.get(), timeout=120.0)
+            except asyncio.TimeoutError:
+                log.error("Event queue timeout for session=%s", session_id)
+                yield _chunk({"content": "\n\n[Error: response timeout]"}, finish="stop")
+                yield "data: [DONE]\n\n"
+                return
+
+            if item is None:
+                # SSE stream ended without idle signal
+                yield _chunk({}, finish="stop")
+                yield "data: [DONE]\n\n"
+                return
+
+            if isinstance(item, Exception):
+                yield _chunk({"content": f"\n\n[Stream error: {item}]"}, finish="stop")
+                yield "data: [DONE]\n\n"
+                return
+
+            event = item
             etype = event.get("type", "")
             props = event.get("properties", {})
 
+            log.debug("=== SSE EVENT [session=%s] type=%s ===", session_id, etype)
+
+            # Track message roles
+            if etype == "message.updated":
+                info = props.get("info", {})
+                msg_id = info.get("id", "")
+                role = info.get("role", "")
+                if role == "user" and msg_id:
+                    user_message_ids.add(msg_id)
+                elif role == "assistant" and msg_id:
+                    assistant_message_ids.add(msg_id)
+                continue  # message.updated itself carries no content to stream
+
             # Handle delta events (incremental text updates)
             if etype == "message.part.delta":
+                part_id = props.get("partID", "")
+                # Skip reasoning/thinking deltas
+                if part_id in reasoning_part_ids:
+                    continue
+                msg_id = props.get("messageID", "")
+                # Skip user message deltas
+                if msg_id in user_message_ids:
+                    continue
                 if props.get("field") == "text":
                     delta = props.get("delta", "")
                     if delta:
-                        full_content += delta
+                        # Track per-part content
+                        if part_id not in part_contents:
+                            part_contents[part_id] = ""
+                        part_contents[part_id] += delta
                         yield _chunk({"content": delta})
 
-            # Handle full part updates (fallback for non-delta events)
+            # Handle full part updates
             elif etype == "session.message.part" or etype == "message.part.updated":
                 part = props.get("part", {})
-                if part.get("type") == "text":
-                    text = part.get("text", "")
-                    if text and text != full_content:
-                        delta_text   = text[len(full_content):]
-                        full_content = text
+                part_type = part.get("type", "")
+                part_id = part.get("id", "")
+                msg_id = part.get("messageID", "")
+
+                # Skip user message parts
+                if msg_id in user_message_ids:
+                    continue
+
+                # Track reasoning part IDs
+                if part_type in ("reasoning", "thinking"):
+                    if part_id:
+                        reasoning_part_ids.add(part_id)
+                    log.info("Skipping reasoning part id=%s session=%s", part_id, session_id)
+                    continue
+
+                # Skip non-text parts (step-start, step-finish, etc.)
+                if part_type != "text":
+                    continue
+
+                # Handle text part updates (fallback when no deltas)
+                text = part.get("text", "")
+                if text and part_id:
+                    current = part_contents.get(part_id, "")
+                    if text != current:
+                        delta_text = text[len(current):]
+                        part_contents[part_id] = text
                         if delta_text:
                             yield _chunk({"content": delta_text})
 
@@ -589,14 +867,22 @@ async def generate_stream_response(session_id: str, model: str, request_id: str)
                     status_type = status
                 else:
                     status_type = None
-                    
+
                 if status_type == "idle":
+                    if next_conv_key and next_conv_key != current_conv_key:
+                        await session_cache.put(next_conv_key, session_id, model_config)
+                        log.info("Mapped next conversation key %s -> session %s", next_conv_key, session_id)
                     yield _chunk({}, finish="stop")
                     yield "data: [DONE]\n\n"
                     return
 
             elif etype == "session.error":
-                error_msg = props.get("error", "Unknown error from OpenCode")
+                error_raw = props.get("error", {})
+                log.error("Session %s full error object: %s", session_id, json.dumps(error_raw, ensure_ascii=False))
+                if isinstance(error_raw, dict):
+                    error_msg = error_raw.get("data", {}).get("message") or error_raw.get("message") or str(error_raw)
+                else:
+                    error_msg = str(error_raw)
                 log.error("Session %s error: %s", session_id, error_msg)
                 yield _chunk({"content": f"\n\n[Error: {error_msg}]"}, finish="stop")
                 yield "data: [DONE]\n\n"
@@ -606,6 +892,20 @@ async def generate_stream_response(session_id: str, model: str, request_id: str)
         log.error("Streaming error for session %s: %s", session_id, exc)
         yield _chunk({"content": f"\n\n[Stream error: {exc}]"}, finish="stop")
         yield "data: [DONE]\n\n"
+    finally:
+        sse_task.cancel()
+        try:
+            await sse_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        
+        # Clean up only for ephemeral sessions (cached sessions must survive for reuse)
+        if delete_on_finish:
+            try:
+                await http_client.delete(f"/session/{session_id}")
+                log.debug("Deleted ephemeral session %s", session_id)
+            except Exception as cleanup_exc:
+                log.warning("Failed to delete ephemeral session %s: %s", session_id, cleanup_exc)
 
 
 # ── FastAPI Endpoints ─────────────────────────────────────────────────────────
@@ -659,24 +959,62 @@ async def chat_completions(
       - If neither is provided, a fresh ephemeral session is created per request.
     """
     async with _semaphore:
-        # Determine conversation key for session lookup
-        conv_key: Optional[str] = x_session_id or request.user or None
+        explicit_conv_key: Optional[str] = x_session_id or request.user
+
+        sanitized_messages = trim_trailing_assistant_messages(request.messages)
+        if not sanitized_messages:
+            raise HTTPException(status_code=400, detail="Invalid chat request: no messages left after trimming trailing assistant messages")
+
+        conv_key: Optional[str] = infer_conv_key(sanitized_messages, explicit_conv_key)
+        next_conv_key: Optional[str] = next_turn_conv_key(sanitized_messages, explicit_conv_key)
 
         model_config = parse_model(request.model)
-        prompt       = convert_messages_to_prompt(request.messages)
+        session_id, is_new_session = await _get_or_create_session(conv_key, model_config)
+        prompt = build_prompt_for_session(sanitized_messages, is_new_session=is_new_session)
         request_id   = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
+        anchor_summary = first_anchor_summary(sanitized_messages)
+        user_summary = last_user_summary(sanitized_messages)
+
         log.info(
-            "request_id=%s model=%s stream=%s conv_key=%s prompt_tokens~=%d",
-            request_id, request.model, request.stream, conv_key, count_tokens(prompt),
+            "request_id=%s model=%s stream=%s conv_key=%s next_conv_key=%s new_session=%s messages=%d anchor=%r last_user=%r prompt_tokens~=%d",
+            request_id,
+            request.model,
+            request.stream,
+            conv_key,
+            next_conv_key,
+            is_new_session,
+            len(sanitized_messages),
+            anchor_summary,
+            user_summary,
+            count_tokens(prompt),
         )
 
-        session_id = await _get_or_create_session(conv_key, model_config)
+        # ── Debug: print incoming messages ────────────────────────────────────
+        log.debug(
+            "=== INCOMING REQUEST [%s] ===\n"
+            "  model      : %s\n"
+            "  conv_key   : %s\n"
+            "  messages(%d):\n%s",
+            request_id,
+            request.model,
+            conv_key,
+            len(sanitized_messages),
+            "\n".join(
+                f"    [{i}] role={m.role!r}  content={str(extract_text_from_content(m.content))[:120]!r}"
+                for i, m in enumerate(sanitized_messages)
+            ),
+        )
+        log.debug(
+            "=== CONVERTED PROMPT [%s] (first 800 chars) ===\n%s",
+            request_id,
+            prompt[:800],
+        )
+        # ─────────────────────────────────────────────────────────────────────
 
         if request.stream:
-            await send_message_async(session_id, prompt, model_config)
             return StreamingResponse(
-                generate_stream_response(session_id, request.model, request_id),
+                generate_stream_response(session_id, prompt, model_config, request.model, request_id, delete_on_finish=(conv_key is None), next_conv_key=next_conv_key, current_conv_key=conv_key),
                 media_type="text/event-stream",
                 headers={"X-Request-Id": request_id, "X-Session-Id": session_id},
             )
@@ -696,6 +1034,10 @@ async def chat_completions(
             request_id, prompt_tokens, completion_tokens,
         )
 
+        if next_conv_key and next_conv_key != conv_key:
+            await session_cache.put(next_conv_key, session_id, model_config)
+            log.info("Mapped next conversation key %s -> session %s", next_conv_key, session_id)
+
         return ChatCompletionResponse(
             id=request_id,
             object="chat.completion",
@@ -705,7 +1047,7 @@ async def chat_completions(
                 Choice(
                     index=0,
                     message=Message(role="assistant", content=content),
-                    finish="stop",
+                    finish_reason="stop",
                 )
             ],
             usage=Usage(
