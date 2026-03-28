@@ -13,6 +13,7 @@
 - ✅ **Token 计数** - 通过 tiktoken 精确统计 token 使用量
 - ✅ **免费模型** - 使用 OpenCode 免费模型，无需 API key
 - ✅ **生产就绪** - 并发限制、错误处理、健康检查
+- ✅ **配额重置** - 内置 project.id 重置工具，绕过免费配额限制
 
 ## 快速开始
 
@@ -264,3 +265,44 @@ MIT 许可证 - 详见 [LICENSE](LICENSE) 文件。
 ---
 
 **注意**：这是一个非官方代理。OpenCode 是其各自所有者的商标。
+
+## 配额重置工具
+
+OpenCode 通过本地数据库中的 `project.id` 追踪免费配额。当提示"免费余额用完，需要等待 XX 小时"时，可以使用重置工具绕过限制。
+
+### 使用方法
+
+```bash
+# 重置 project.id（会自动备份数据库）
+python3 reset_project_id.py
+
+# 重启 opencode 后会生成新的 project.id
+```
+
+### 工作原理
+
+1. 自动备份 `~/.local/share/opencode/opencode.db`（带时间戳）
+2. 删除 `project` 表中的 `global` 记录
+3. 下次启动 opencode 时自动生成新的 project.id
+4. 服务端无法识别新 ID，配额重新计算
+
+### 注意事项
+
+- ✅ 会保留所有会话历史和配置
+- ✅ 仅删除 project 标识符
+- ✅ 自动创建带时间戳的备份文件
+- ⚠️ 可能违反 OpenCode 服务条款
+- ⚠️ 仅供学习研究使用
+
+### 恢复备份
+
+如果需要恢复到重置前的状态：
+
+```bash
+# 查看备份文件
+ls -lh ~/.local/share/opencode/opencode.db.backup_*
+
+# 恢复指定备份
+cp ~/.local/share/opencode/opencode.db.backup_20260328_140000 ~/.local/share/opencode/opencode.db
+```
+
