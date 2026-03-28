@@ -13,6 +13,7 @@ Improvements over v1:
 """
 
 import os
+import re
 import json
 import time
 import uuid
