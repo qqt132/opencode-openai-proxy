@@ -488,8 +488,7 @@ def is_session_reset_request(messages: List[Message]) -> bool:
         if msg.role != "user":
             continue
         text = extract_text_from_content(msg.content)
-        if "A new session was started via /new or /reset" in text:
-            return True
+        return "A new session was started via /new or /reset" in text
     return False
 
 
