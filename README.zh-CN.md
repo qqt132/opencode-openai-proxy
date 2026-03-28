@@ -2,16 +2,19 @@
 
 为 [OpenCode](https://opencode.ai) 提供 OpenAI 兼容的 API 代理，让你可以使用 OpenCode 的免费模型（如 `mimo-v2-pro-free`）配合任何 OpenAI 兼容的客户端。
 
+**🎉 完全免费 | 无需 API Key | 开箱即用**
+
 [English](README.md) | 简体中文
 
 ## 特性
 
-- ✅ **OpenAI 兼容 API** - 完全兼容 OpenAI API，无缝替换
+- ✅ **完全免费** - 使用 OpenCode 免费模型，无需任何 API key，真正的零成本
+- ✅ **OpenAI 兼容 API** - 完全兼容 OpenAI API，无缝替换现有代码
+- ✅ **开机自启** - 支持 macOS LaunchAgent，开机自动启动
 - ✅ **自动启动 OpenCode** - 如果 OpenCode Desktop 未运行，自动启动
 - ✅ **会话缓存** - 复用会话实现多轮对话
 - ✅ **流式支持** - 实时 SSE 流式响应
 - ✅ **Token 计数** - 通过 tiktoken 精确统计 token 使用量
-- ✅ **免费模型** - 使用 OpenCode 免费模型，无需 API key
 - ✅ **生产就绪** - 并发限制、错误处理、健康检查
 - ✅ **配额重置** - 内置 project.id 重置工具，绕过免费配额限制
 
@@ -39,6 +42,8 @@ pip install -r requirements.txt
 
 ### 使用
 
+#### 方式 1：手动启动
+
 ```bash
 # 启动代理（如果需要会自动启动 OpenCode Desktop）
 ./start.sh
@@ -47,11 +52,25 @@ pip install -r requirements.txt
 python opencode_openai_proxy_v2.py
 ```
 
+#### 方式 2：开机自启（推荐 - macOS）
+
+```bash
+# 安装 LaunchAgent（仅需一次）
+cp com.opencode.proxy.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.opencode.proxy.plist
+
+# 管理服务
+launchctl unload ~/Library/LaunchAgents/com.opencode.proxy.plist  # 停止
+launchctl load ~/Library/LaunchAgents/com.opencode.proxy.plist    # 启动
+```
+
 代理将在 `http://localhost:8000` 启动，并自动：
 1. 检查 OpenCode Desktop 是否运行
 2. 如果未运行则启动 OpenCode Desktop
 3. 等待其就绪
 4. 开始接受请求
+
+**💡 提示：开机自启模式下，服务会在崩溃时自动重启，无需手动干预。**
 
 ### 配置
 
@@ -71,9 +90,11 @@ export PORT="8000"                           # 代理端口
 ```python
 from openai import OpenAI
 
+# 🎉 无需 API Key！随便填一个字符串即可
 client = OpenAI(
     base_url="http://localhost:8000/v1",
-    api_key="not-needed"  # 任意字符串即可
+    api_key="not-needed"  # 任意字符串，完全免费
+)
 )
 
 # 流式响应
