@@ -493,11 +493,20 @@ def is_session_reset_request(messages: List[Message]) -> bool:
 
 
 def _stable_user_fingerprint(messages: List[Message]) -> Optional[str]:
-    for msg in reversed(messages):
+    """
+    Stable fingerprint for a normal chat conversation.
+
+    Use the first non-reset user payload rather than the latest user payload so the
+    key stays stable across subsequent turns in the same conversation, while still
+    separating different chats that share the same global system prompt.
+    """
+    for msg in messages:
         if msg.role != "user":
             continue
         text = summarize_text(extract_text_from_content(msg.content), limit=240)
         if not text:
+            continue
+        if "A new session was started via /new or /reset" in text:
             continue
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
     return None
