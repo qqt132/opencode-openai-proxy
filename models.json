@@ -1,5 +1,14 @@
 [
   {
+    "id": "opencode/qwen3.6-plus-free",
+    "name": "Qwen3.6 Plus Free",
+    "context": 1048576,
+    "output": 64000,
+    "vision": false,
+    "reasoning": true,
+    "toolcall": true
+  },
+  {
     "id": "opencode/mimo-v2-pro-free",
     "name": "MiMo V2 Pro Free",
     "context": 1048576,

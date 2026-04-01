@@ -153,6 +153,7 @@ curl http://localhost:8000/v1/models
 
 | Model ID | Name | Context | Max Output | Vision | Reasoning |
 |----------|------|---------|------------|--------|-----------|
+| `opencode/qwen3.6-plus-free` | Qwen3.6 Plus Free | 1.0M | 64K | ❌ | ✅ |
 | `opencode/mimo-v2-pro-free` | MiMo V2 Pro Free | 1.0M | 64K | ❌ | ✅ |
 | `opencode/nemotron-3-super-free` | Nemotron 3 Super Free | 1M | 128K | ❌ | ✅ |
 | `opencode/gpt-5-nano` | GPT-5 Nano | 400K | 128K | ✅ | ✅ |
